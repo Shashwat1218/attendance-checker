@@ -5,6 +5,7 @@ import plotly.express as px
 from io import BytesIO
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+import PIL.Image  # Pillow for image handling
 
 # Google Sheets and email notification code removed/commented out completely
 # No dependency on ServiceAccountCredentials or credential JSON files
@@ -119,6 +120,7 @@ def add_table_to_pdf(pdf, df, title):
 def generate_pdf_report(full_table, top_performers, non_compliant):
     pdf_buffer = BytesIO()
     with PdfPages(pdf_buffer) as pdf:
+        # Summary page
         plt.figure(figsize=(10, 4))
         plt.axis('off')
         plt.title("BT Group Attendance Compliance Report", fontsize=20)
@@ -132,7 +134,9 @@ def generate_pdf_report(full_table, top_performers, non_compliant):
             plt.text(0, 0.7 - i * 0.15, stat, fontsize=14)
         pdf.savefig()
         plt.close()
-        for fig in [
+
+        # Plotly figures to embed
+        figures = [
             px.pie(full_table, names='Compliant', title='Compliance Distribution',
                    color='Compliant', color_discrete_map={'Yes': 'green', 'No': 'red'}),
             px.bar(full_table.sort_values('Working Days', ascending=False), x='First Name', y='Working Days',
@@ -141,25 +145,30 @@ def generate_pdf_report(full_table, top_performers, non_compliant):
             px.bar(full_table.sort_values('Days Missed for Compliance', ascending=False), x='First Name',
                    y='Days Missed for Compliance', title="Days Missed for Compliance", color='Compliant',
                    color_discrete_map={'Yes': 'green', 'No': 'red'})
-        ]:
+        ]
+
+        for fig in figures:
             try:
                 img_bytes = plotly_fig_to_png(fig)
-                fig_plt = plt.figure(figsize=(10, 6))
-                plt.imshow(plt.imread(BytesIO(img_bytes)))
+                img = PIL.Image.open(BytesIO(img_bytes))
+                fig_plt = plt.figure(figsize=(img.width/100, img.height/100), dpi=100)
                 plt.axis('off')
+                plt.imshow(img)
                 pdf.savefig(fig_plt, bbox_inches='tight')
                 plt.close(fig_plt)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Failed to add figure to PDF: {e}")
+                continue
+
+        # Add tables to the PDF
         add_table_to_pdf(pdf, full_table, "Full Compliance Table")
         if not top_performers.empty:
             add_table_to_pdf(pdf, top_performers, "Top Performers")
         if not non_compliant.empty:
             add_table_to_pdf(pdf, non_compliant, "Non-Compliant Employees")
+
     pdf_buffer.seek(0)
     return pdf_buffer.read()
-
-# Notification related code fully removed since it's commented out by user request.
 
 def main():
     st.set_page_config(page_title="BT Attendance Compliance Dashboard", layout="wide", page_icon="BT.png")
