@@ -5,6 +5,8 @@ import plotly.express as px
 from io import BytesIO
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
+from PIL import Image
+import numpy as np
 
 def emp_id_clean(id_val):
     try:
@@ -94,6 +96,16 @@ def plotly_fig_to_png(fig):
     import plotly.io as pio
     return pio.to_image(fig, format="png")
 
+def add_plotly_img_to_pdf(pdf, img_bytes, title=""):
+    img = Image.open(BytesIO(img_bytes)).convert("RGB")
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.axis("off")
+    if title:
+        plt.title(title, fontsize=14)
+    ax.imshow(np.array(img))
+    pdf.savefig(fig, bbox_inches='tight')
+    plt.close(fig)
+
 def add_table_to_pdf(pdf, df, title):
     fig, ax = plt.subplots(figsize=(12, 0.7 + len(df) * 0.4))
     ax.axis('off')
@@ -139,16 +151,13 @@ def generate_pdf_report(full_table, top_performers, non_compliant):
                    y='Days Missed for Compliance', title="Days Missed for Compliance", color='Compliant',
                    color_discrete_map={'Yes': 'green', 'No': 'red'})
         ]
-        for fig in figs:
+        titles = ["Compliance Distribution", "Total Working Days per Employee", "Days Missed for Compliance"]
+        for fig, chart_title in zip(figs, titles):
             try:
                 img_bytes = plotly_fig_to_png(fig)
-                fig_plt = plt.figure(figsize=(10, 6))
-                plt.imshow(plt.imread(BytesIO(img_bytes)))
-                plt.axis('off')
-                pdf.savefig(fig_plt, bbox_inches='tight')
-                plt.close(fig_plt)
-            except Exception:
-                pass
+                add_plotly_img_to_pdf(pdf, img_bytes, chart_title)
+            except Exception as e:
+                st.error(f"Failed to add chart {chart_title} to PDF: {e}")
         add_table_to_pdf(pdf, full_table, "Full Compliance Table")
         if not top_performers.empty:
             add_table_to_pdf(pdf, top_performers, "Top Performers")
