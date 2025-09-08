@@ -7,14 +7,13 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import PIL.Image  # Pillow for image handling
 
-# Google Sheets and email notification code removed/commented out completely
-# No dependency on ServiceAccountCredentials or credential JSON files
 
 def emp_id_clean(id_val):
     try:
         return int(float(str(id_val).strip()))
     except Exception:
         return str(id_val).strip()
+
 
 def custom_round(value):
     integer_part = int(np.floor(value))
@@ -24,19 +23,25 @@ def custom_round(value):
     else:
         return integer_part + 1
 
+
 def process_data(roster_file, attendance_file):
     roster_df = pd.read_excel(roster_file, sheet_name='Sheet1', header=None)
     attendance_df = pd.read_excel(attendance_file, sheet_name='Sheet1', header=None)
+
     cols_roster = ['Dept', 'Employee ID', 'First Name', 'Last Name'] + list(range(4, 32))
     roster_df.columns = cols_roster
     roster_df = roster_df.iloc[3:].reset_index(drop=True)
+
     cols_attendance = ['Dept', 'Employee ID', 'First Name', 'Last Name', 'Attendance']
     attendance_df.columns = cols_attendance
     attendance_df = attendance_df.iloc[3:].reset_index(drop=True)
+
     shifts = roster_df.loc[:, list(range(4, 32))]
     day_labels = pd.read_excel(roster_file, sheet_name='Sheet1', header=None).iloc[2, 4:32].values
     weekday_mask = np.isin(day_labels, ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'])
+
     working_days, office_days, sl_count, al_count, hsl_count = [], [], [], [], []
+
     for idx, row in shifts.iterrows():
         arr = row.values
         wd_base = np.sum(np.isin(arr, ['M', 'D', 'N']))
@@ -46,18 +51,23 @@ def process_data(roster_file, attendance_file):
         sl_count.append(np.sum(arr == 'SL'))
         al_count.append(np.sum(arr == 'A/L'))
         hsl_count.append(hsl_total)
+
         arr_weekday = arr[weekday_mask]
         wd_compliance_base = np.sum((arr_weekday == 'M') | (arr_weekday == 'D')) + np.sum(arr_weekday == 'HSL') * 0.5
         rounded_val = wd_compliance_base * 0.6
         office_days.append(custom_round(rounded_val))
+
     actual_present = attendance_df['Attendance'].astype(float).round(2)
     office_days_np = np.array(office_days)
+
     with np.errstate(divide='ignore', invalid='ignore'):
         adjusted_attendance = np.where(office_days_np == 0, 0, actual_present / office_days_np * 5)
+
     adjusted_attendance = np.round(adjusted_attendance, 2)
     compliant = adjusted_attendance >= 3
     days_needed = np.ceil(3 * office_days_np / 5)
     days_missed = (days_needed - actual_present).clip(lower=0).astype(int)
+
     results = pd.DataFrame({
         'Employee ID': roster_df['Employee ID'].apply(lambda x: emp_id_clean(x)),
         'First Name': roster_df['First Name'],
@@ -74,6 +84,7 @@ def process_data(roster_file, attendance_file):
     })
     return results
 
+
 def styled_dataframe(df):
     df = df.copy()
     df.index = np.arange(1, len(df) + 1)
@@ -88,15 +99,13 @@ def styled_dataframe(df):
     ])
     return styler
 
+
 def to_excel(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='ComplianceSummary')
     return output.getvalue()
 
-def plotly_fig_to_png(fig):
-    import plotly.io as pio
-    return pio.to_image(fig, format="png")
 
 def add_table_to_pdf(pdf, df, title):
     fig, ax = plt.subplots(figsize=(12, 0.7 + len(df) * 0.4))
@@ -117,6 +126,7 @@ def add_table_to_pdf(pdf, df, title):
     pdf.savefig(fig, bbox_inches='tight')
     plt.close(fig)
 
+
 def generate_pdf_report(full_table, top_performers, non_compliant):
     pdf_buffer = BytesIO()
     with PdfPages(pdf_buffer) as pdf:
@@ -128,39 +138,41 @@ def generate_pdf_report(full_table, top_performers, non_compliant):
             f"Total Employees: {len(full_table)}",
             f"Compliant Employees: {full_table['Compliant'].value_counts().get('Yes', 0)}",
             f"Non-Compliant Employees: {full_table['Compliant'].value_counts().get('No', 0)}",
-            f"Average Adjusted Attendance: {full_table['Adjusted Attendance'].mean():.2f}",
+            f"Average Adjusted Attendance: {full_table['Adjusted Attendance'].astype(float).mean():.2f}",
         ]
         for i, stat in enumerate(stats):
             plt.text(0, 0.7 - i * 0.15, stat, fontsize=14)
         pdf.savefig()
         plt.close()
 
-        # Plotly figures to embed
+        # Plotly figures (converted via built-in to_image)
         figures = [
             px.pie(full_table, names='Compliant', title='Compliance Distribution',
                    color='Compliant', color_discrete_map={'Yes': 'green', 'No': 'red'}),
-            px.bar(full_table.sort_values('Working Days', ascending=False), x='First Name', y='Working Days',
+            px.bar(full_table.sort_values('Working Days', ascending=False),
+                   x='First Name', y='Working Days',
                    title="Total Working Days per Employee", color='Compliant',
                    color_discrete_map={'Yes': 'green', 'No': 'red'}),
-            px.bar(full_table.sort_values('Days Missed for Compliance', ascending=False), x='First Name',
-                   y='Days Missed for Compliance', title="Days Missed for Compliance", color='Compliant',
+            px.bar(full_table.sort_values('Days Missed for Compliance', ascending=False),
+                   x='First Name', y='Days Missed for Compliance',
+                   title="Days Missed for Compliance", color='Compliant',
                    color_discrete_map={'Yes': 'green', 'No': 'red'})
         ]
 
         for fig in figures:
             try:
-                img_bytes = plotly_fig_to_png(fig)
+                img_bytes = fig.to_image(format="png")  # no kaleido required
                 img = PIL.Image.open(BytesIO(img_bytes))
-                fig_plt = plt.figure(figsize=(img.width/100, img.height/100), dpi=100)
+                plt.figure(figsize=(img.width / 100, img.height / 100), dpi=100)
                 plt.axis('off')
                 plt.imshow(img)
-                pdf.savefig(fig_plt, bbox_inches='tight')
-                plt.close(fig_plt)
+                pdf.savefig(bbox_inches='tight')
+                plt.close()
             except Exception as e:
                 print(f"Failed to add figure to PDF: {e}")
                 continue
 
-        # Add tables to the PDF
+        # Add tables
         add_table_to_pdf(pdf, full_table, "Full Compliance Table")
         if not top_performers.empty:
             add_table_to_pdf(pdf, top_performers, "Top Performers")
@@ -170,13 +182,17 @@ def generate_pdf_report(full_table, top_performers, non_compliant):
     pdf_buffer.seek(0)
     return pdf_buffer.read()
 
+
 def main():
     st.set_page_config(page_title="BT Attendance Compliance Dashboard", layout="wide", page_icon="BT.png")
     st.title("BT Attendance Compliance Dashboard")
+
     roster_file = st.file_uploader("Upload Roster Excel file", type=["xls", "xlsx"])
     attendance_file = st.file_uploader("Upload Attendance Excel file", type=["xls", "xlsx"])
+
     with st.form("calc_form"):
         submit = st.form_submit_button("Calculate Compliance")
+
     results = None
     if submit and roster_file and attendance_file:
         with st.spinner("Processing data, please wait..."):
@@ -187,18 +203,22 @@ def main():
             non_compliant = results[results['Compliant'] == 'No']
             pdf_bytes = generate_pdf_report(results, top_performers, non_compliant)
             st.session_state['pdf_bytes'] = pdf_bytes
+
     if 'results' in st.session_state:
         results = st.session_state['results']
         st.subheader(f"Compliance Data for {len(results)} Employees")
         st.dataframe(styled_dataframe(results), width=1500)
+
         tabs = st.tabs(["Summary", "Visualizations", "Top Performers",
                         "Non-Compliant Employees", "Export"])
+
         with tabs[0]:
             st.markdown("### 📊 Summary Statistics")
             st.metric("Total Employees", len(results))
             st.metric("Compliant Employees", results['Compliant'].value_counts().get('Yes', 0))
             st.metric("Non-Compliant Employees", results['Compliant'].value_counts().get('No', 0))
             st.metric("Average Adjusted Attendance", results['Adjusted Attendance'].astype(float).mean().round(2))
+
         with tabs[1]:
             st.markdown("### 📈 Visualizations")
             col1, col2 = st.columns(2)
@@ -213,8 +233,10 @@ def main():
             with col2:
                 fig_bar_missed = px.bar(results.sort_values('Days Missed for Compliance', ascending=False),
                                         x='First Name', y='Days Missed for Compliance',
-                                        title="Days Missed for Compliance", color='Compliant', color_discrete_map={'Yes': 'green', 'No': 'red'})
+                                        title="Days Missed for Compliance", color='Compliant',
+                                        color_discrete_map={'Yes': 'green', 'No': 'red'})
                 st.plotly_chart(fig_bar_missed, use_container_width=True)
+
         with tabs[2]:
             st.markdown("### 🏆 Top Performers")
             max_top = min(20, len(results))
@@ -222,12 +244,14 @@ def main():
             top_performers = results.sort_values(by='Adjusted Attendance', ascending=False).head(num_top)
             st.dataframe(styled_dataframe(top_performers[['Employee ID', 'First Name', 'Last Name',
                                                           'Adjusted Attendance', 'Compliant']]), width=1000)
+
         with tabs[3]:
             st.markdown("### ❌ Non-Compliant Employees")
             non_compliant = results[results['Compliant'] == 'No']
             st.dataframe(styled_dataframe(non_compliant[
                 ['Employee ID', 'First Name', 'Last Name', 'Days Missed for Compliance', 'Sick Leave Days',
                  'Annual Leave Days', 'Half-Day Sick Leave Days']]), width=1000)
+
         with tabs[4]:
             st.markdown("### 📥 Export Data and Visual Report")
             excel_bytes = to_excel(results)
@@ -241,6 +265,7 @@ def main():
                                    mime="application/pdf")
     else:
         st.info("Please upload both Roster and Attendance files and click 'Calculate Compliance'.")
+
 
 if __name__ == "__main__":
     main()
