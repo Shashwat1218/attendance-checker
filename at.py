@@ -5,20 +5,9 @@ import plotly.express as px
 from io import BytesIO
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-# import gspread
-# from oauth2client.service_account import ServiceAccountCredentials
 
-# Google Sheets setup (notification and sheet access removed)
-# scope = [
-#     "https://spreadsheets.google.com/feeds",
-#     "https://www.googleapis.com/auth/spreadsheets",
-#     "https://www.googleapis.com/auth/drive.file",
-#     "https://www.googleapis.com/auth/drive"
-# ]
-# creds = ServiceAccountCredentials.from_json_keyfile_name(
-#     'attendance-compliance-shashwat-97b0b49a6cdb.json', scope)
-# client = gspread.authorize(creds)
-# sheet = client.open("Database").sheet1
+
+# ---------------- Utility Functions ---------------- #
 
 def emp_id_clean(id_val):
     try:
@@ -26,28 +15,31 @@ def emp_id_clean(id_val):
     except Exception:
         return str(id_val).strip()
 
+
 def custom_round(value):
     integer_part = int(np.floor(value))
     decimal_part = value - integer_part
-    if decimal_part <= 0.4:
-        return integer_part
-    else:
-        return integer_part + 1
+    return integer_part if decimal_part <= 0.4 else integer_part + 1
+
 
 def process_data(roster_file, attendance_file):
     roster_df = pd.read_excel(roster_file, sheet_name='Sheet1', header=None)
     attendance_df = pd.read_excel(attendance_file, sheet_name='Sheet1', header=None)
+
     cols_roster = ['Dept', 'Employee ID', 'First Name', 'Last Name'] + list(range(4, 32))
     roster_df.columns = cols_roster
     roster_df = roster_df.iloc[3:].reset_index(drop=True)
+
     cols_attendance = ['Dept', 'Employee ID', 'First Name', 'Last Name', 'Attendance']
     attendance_df.columns = cols_attendance
     attendance_df = attendance_df.iloc[3:].reset_index(drop=True)
+
     shifts = roster_df.loc[:, list(range(4, 32))]
     day_labels = pd.read_excel(roster_file, sheet_name='Sheet1', header=None).iloc[2, 4:32].values
     weekday_mask = np.isin(day_labels, ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'])
+
     working_days, office_days, sl_count, al_count, hsl_count = [], [], [], [], []
-    for idx, row in shifts.iterrows():
+    for _, row in shifts.iterrows():
         arr = row.values
         wd_base = np.sum(np.isin(arr, ['M', 'D', 'N']))
         hsl_total = np.sum(arr == 'HSL')
@@ -56,18 +48,23 @@ def process_data(roster_file, attendance_file):
         sl_count.append(np.sum(arr == 'SL'))
         al_count.append(np.sum(arr == 'A/L'))
         hsl_count.append(hsl_total)
+
         arr_weekday = arr[weekday_mask]
         wd_compliance_base = np.sum((arr_weekday == 'M') | (arr_weekday == 'D')) + np.sum(arr_weekday == 'HSL') * 0.5
         rounded_val = wd_compliance_base * 0.6
         office_days.append(custom_round(rounded_val))
+
     actual_present = attendance_df['Attendance'].astype(float).round(2)
     office_days_np = np.array(office_days)
+
     with np.errstate(divide='ignore', invalid='ignore'):
         adjusted_attendance = np.where(office_days_np == 0, 0, actual_present / office_days_np * 5)
         adjusted_attendance = np.round(adjusted_attendance, 2)
+
     compliant = adjusted_attendance >= 3
     days_needed = np.ceil(3 * office_days_np / 5)
     days_missed = (days_needed - actual_present).clip(lower=0).astype(int)
+
     results = pd.DataFrame({
         'Employee ID': roster_df['Employee ID'].apply(lambda x: emp_id_clean(x)),
         'First Name': roster_df['First Name'],
@@ -84,6 +81,7 @@ def process_data(roster_file, attendance_file):
     })
     return results
 
+
 def styled_dataframe(df):
     df = df.copy()
     df.index = np.arange(1, len(df) + 1)
@@ -91,6 +89,7 @@ def styled_dataframe(df):
     for col in float_cols:
         if col in df.columns:
             df[col] = df[col].apply(lambda x: f"{float(x):.2f}")
+
     styler = df.style.set_properties(**{'text-align': 'center'})
     styler = styler.set_table_styles([
         {'selector': 'th', 'props': [('text-align', 'center'), ('vertical-align', 'middle')]},
@@ -98,15 +97,23 @@ def styled_dataframe(df):
     ])
     return styler
 
+
 def to_excel(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='ComplianceSummary')
     return output.getvalue()
 
+
 def plotly_fig_to_png(fig):
     import plotly.io as pio
-    return pio.to_image(fig, format="png")
+    try:
+        return pio.to_image(fig, format="png")
+    except Exception as e:
+        raise RuntimeError(
+            f"Plotly image export failed. Ensure 'kaleido' is installed. Error: {e}"
+        )
+
 
 def add_table_to_pdf(pdf, df, title):
     fig, ax = plt.subplots(figsize=(12, 0.7 + len(df) * 0.4))
@@ -122,14 +129,16 @@ def add_table_to_pdf(pdf, df, title):
     table.auto_set_font_size(False)
     table.set_fontsize(8)
     table.auto_set_column_width(col=list(range(len(df.columns))))
-    for key, cell in table.get_celld().items():
+    for _, cell in table.get_celld().items():
         cell.set_text_props(ha='center', va='center')
     pdf.savefig(fig, bbox_inches='tight')
     plt.close(fig)
 
+
 def generate_pdf_report(full_table, top_performers, non_compliant):
     pdf_buffer = BytesIO()
     with PdfPages(pdf_buffer) as pdf:
+        # Cover page with stats
         plt.figure(figsize=(10, 4))
         plt.axis('off')
         plt.title("BT Group Attendance Compliance Report", fontsize=20)
@@ -143,7 +152,9 @@ def generate_pdf_report(full_table, top_performers, non_compliant):
             plt.text(0, 0.7 - i * 0.15, stat, fontsize=14)
         pdf.savefig()
         plt.close()
-        for fig in [
+
+        # Charts
+        chart_figs = [
             px.pie(full_table, names='Compliant', title='Compliance Distribution',
                    color='Compliant', color_discrete_map={'Yes': 'green', 'No': 'red'}),
             px.bar(full_table.sort_values('Working Days', ascending=False), x='First Name', y='Working Days',
@@ -152,7 +163,9 @@ def generate_pdf_report(full_table, top_performers, non_compliant):
             px.bar(full_table.sort_values('Days Missed for Compliance', ascending=False), x='First Name',
                    y='Days Missed for Compliance', title="Days Missed for Compliance", color='Compliant',
                    color_discrete_map={'Yes': 'green', 'No': 'red'})
-        ]:
+        ]
+
+        for fig in chart_figs:
             try:
                 img_bytes = plotly_fig_to_png(fig)
                 fig_plt = plt.figure(figsize=(10, 6))
@@ -160,19 +173,28 @@ def generate_pdf_report(full_table, top_performers, non_compliant):
                 plt.axis('off')
                 pdf.savefig(fig_plt, bbox_inches='tight')
                 plt.close(fig_plt)
-            except Exception:
-                pass
+            except Exception as e:
+                # Add placeholder page in PDF
+                plt.figure(figsize=(10, 4))
+                plt.axis('off')
+                plt.text(0.1, 0.5, f"⚠️ Chart could not be rendered.\n{e}", fontsize=12, color="red")
+                pdf.savefig()
+                plt.close()
+                # Also notify in Streamlit
+                st.warning(f"⚠️ Skipped a chart in PDF due to export error: {e}")
+
+        # Tables
         add_table_to_pdf(pdf, full_table, "Full Compliance Table")
         if not top_performers.empty:
             add_table_to_pdf(pdf, top_performers, "Top Performers")
         if not non_compliant.empty:
             add_table_to_pdf(pdf, non_compliant, "Non-Compliant Employees")
-    # Important: pdf context closes here
+
     pdf_buffer.seek(0)
-    return pdf_buffer.getvalue()  # Return bytes after closing PdfPages
+    return pdf_buffer.getvalue()
 
 
-# notify_strikes function and all notification-related UI code commented out for deployment safety
+# ---------------- Streamlit App ---------------- #
 
 def main():
     st.set_page_config(page_title="Attendance Compliance Dashboard", layout="wide", page_icon="BT.png")
@@ -183,7 +205,6 @@ def main():
 
     with st.form("calc_form"):
         submit = st.form_submit_button("Calculate Compliance")
-        results = None
         if submit and roster_file and attendance_file:
             with st.spinner("Processing data, please wait..."):
                 results = process_data(roster_file, attendance_file)
@@ -255,6 +276,7 @@ def main():
                                    mime="application/pdf")
     else:
         st.info("Please upload both Roster and Attendance files and click 'Calculate Compliance'.")
+
 
 if __name__ == "__main__":
     main()
